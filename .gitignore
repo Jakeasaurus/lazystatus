@@ -1,0 +1,7 @@
+/bin/
+/dist/
+/build/
+/coverage/
+.DS_Store
+lazystatus
+*.log
