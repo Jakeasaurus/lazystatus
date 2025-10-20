@@ -36,6 +36,17 @@ Monitor multiple status pages (GitHub, Atlassian, Cloudflare, etc.) in a beautif
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+# Add the tap and install
+brew tap jakeasaurus/tap
+brew install lazystatus
+
+# Or in one line
+brew install jakeasaurus/tap/lazystatus
+```
+
 ### Build from Source
 
 ```bash
