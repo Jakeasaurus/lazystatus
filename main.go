@@ -59,6 +59,7 @@ func printHelp() {
 	fmt.Println("  a          Add new service")
 	fmt.Println("  e          Edit service")
 	fmt.Println("  d          Delete service")
+	fmt.Println("  o          Open service URL in browser")
 	fmt.Println("  Enter      Refresh selected service")
 	fmt.Println("  r          Refresh all services")
 	fmt.Println("")

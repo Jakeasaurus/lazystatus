@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,7 @@ type keyMap struct {
 	Add       key.Binding
 	Edit      key.Binding
 	Delete    key.Binding
+	Open      key.Binding
 	Refresh     key.Binding
 	RefreshAll  key.Binding
 	Help        key.Binding
@@ -104,6 +106,10 @@ var keys = keyMap{
 	Delete: key.NewBinding(
 		key.WithKeys("d"),
 		key.WithHelp("d", "delete service"),
+	),
+	Open: key.NewBinding(
+		key.WithKeys("o"),
+		key.WithHelp("o", "open in browser"),
 	),
 	Refresh: key.NewBinding(
 		key.WithKeys("enter"),
@@ -148,13 +154,13 @@ var keys = keyMap{
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.Edit, k.Delete, k.Refresh, k.RefreshAll, k.Help, k.Quit}
+	return []key.Binding{k.Add, k.Edit, k.Delete, k.Open, k.Refresh, k.RefreshAll, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Home, k.End},
-		{k.Add, k.Edit, k.Delete},
+		{k.Add, k.Edit, k.Delete, k.Open},
 		{k.Refresh, k.RefreshAll, k.Help, k.Quit},
 	}
 }
@@ -266,6 +272,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}))
 		return m, tea.Batch(cmds...)
 
+	case statusMsg:
+		m.statusMsg = string(msg)
+		return m, nil
+
 	case refreshMsg:
 		if msg.Err != nil {
 			m.manager.UpdateStatus(msg.Index, StatusConnectionError, nil, nil, "", msg.Err.Error())
@@ -356,6 +366,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case key.Matches(msg, keys.Open):
+			if m.selected < len(m.sortedIndices) {
+				actualIndex := m.sortedIndices[m.selected]
+				services := m.manager.List()
+				if actualIndex < len(services) {
+					return m, m.openURLCmd(services[actualIndex].Config.URL)
+				}
+			}
+
 		case key.Matches(msg, keys.Refresh):
 			if m.selected < len(m.sortedIndices) {
 				actualIndex := m.sortedIndices[m.selected]
@@ -386,12 +405,24 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			services := m.manager.List()
 			if m.deleteTarget >= 0 && m.deleteTarget < len(services) {
+				// Get the name for confirmation message
+				deletedName := services[m.deleteTarget].Config.Name
+				
+				// Delete the service
 				m.manager.Remove(m.deleteTarget)
 				m.manager.Save()
-				if m.selected >= m.deleteTarget && m.selected > 0 {
-					m.selected--
+				
+				// Rebuild sorted indices after deletion
+				m.updateSortedIndices()
+				
+				// Adjust selection to stay in bounds
+				if m.selected >= len(m.sortedIndices) && len(m.sortedIndices) > 0 {
+					m.selected = len(m.sortedIndices) - 1
+				} else if len(m.sortedIndices) == 0 {
+					m.selected = 0
 				}
-				m.statusMsg = "Service deleted"
+				
+				m.statusMsg = fmt.Sprintf("Deleted: %s", deletedName)
 			}
 			m.mode = ModeNormal
 			m.viewport.SetContent(m.renderDetails())
@@ -409,6 +440,8 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var idx int
 			if m.mode == ModeAdd {
 				idx = len(m.manager.List()) - 1
+				// Rebuild sorted indices after adding
+				m.updateSortedIndices()
 				// Find the new service in sorted view
 				for i, sortedIdx := range m.sortedIndices {
 					if sortedIdx == idx {
@@ -418,6 +451,8 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			} else {
 				idx = m.sortedIndices[m.selected]
+				// Rebuild sorted indices after editing (status might have changed)
+				m.updateSortedIndices()
 			}
 			m.statusMsg = "Service saved"
 			m.mode = ModeNormal
@@ -745,7 +780,7 @@ func (m Model) renderCommandWindow() string {
 		}
 
 	default:
-		return style.Render("a: add • e: edit • d: delete • enter: refresh selected • r: refresh all • ?: help")
+		return style.Render("a: add • e: edit • d: delete • o: open • enter: refresh • r: refresh all • ?: help")
 	}
 
 	return ""
@@ -808,6 +843,20 @@ func (m Model) refreshAllCmd() tea.Cmd {
 	}
 	return tea.Batch(cmds...)
 }
+
+func (m Model) openURLCmd(urlStr string) tea.Cmd {
+	return func() tea.Msg {
+		// Use macOS 'open' command to open URL in default browser
+		cmd := exec.Command("open", urlStr)
+		err := cmd.Start()
+		if err != nil {
+			return statusMsg(fmt.Sprintf("Failed to open URL: %v", err))
+		}
+		return statusMsg("Opened in browser")
+	}
+}
+
+type statusMsg string
 
 func convertStatusLevel(level fetch.StatusLevel) StatusLevel {
 	switch level {
