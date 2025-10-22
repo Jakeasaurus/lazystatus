@@ -1,0 +1,132 @@
+name: Release and Update Homebrew
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build binaries
+        run: |
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -o lazystatus-darwin-amd64 -ldflags="-s -w" .
+          
+          # macOS ARM64 (Apple Silicon)
+          GOOS=darwin GOARCH=arm64 go build -o lazystatus-darwin-arm64 -ldflags="-s -w" .
+          
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -o lazystatus-linux-amd64 -ldflags="-s -w" .
+          
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -o lazystatus-linux-arm64 -ldflags="-s -w" .
+
+      - name: Create archives
+        run: |
+          tar -czf lazystatus-darwin-amd64.tar.gz lazystatus-darwin-amd64
+          tar -czf lazystatus-darwin-arm64.tar.gz lazystatus-darwin-arm64
+          tar -czf lazystatus-linux-amd64.tar.gz lazystatus-linux-amd64
+          tar -czf lazystatus-linux-arm64.tar.gz lazystatus-linux-arm64
+
+      - name: Generate checksums
+        run: |
+          shasum -a 256 lazystatus-darwin-amd64.tar.gz > lazystatus-darwin-amd64.tar.gz.sha256
+          shasum -a 256 lazystatus-darwin-arm64.tar.gz > lazystatus-darwin-arm64.tar.gz.sha256
+          shasum -a 256 lazystatus-linux-amd64.tar.gz > lazystatus-linux-amd64.tar.gz.sha256
+          shasum -a 256 lazystatus-linux-arm64.tar.gz > lazystatus-linux-arm64.tar.gz.sha256
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            lazystatus-darwin-amd64.tar.gz
+            lazystatus-darwin-arm64.tar.gz
+            lazystatus-linux-amd64.tar.gz
+            lazystatus-linux-arm64.tar.gz
+            lazystatus-darwin-amd64.tar.gz.sha256
+            lazystatus-darwin-arm64.tar.gz.sha256
+            lazystatus-linux-amd64.tar.gz.sha256
+            lazystatus-linux-arm64.tar.gz.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+  update-homebrew-tap:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          
+          # Download the macOS ARM64 archive to calculate SHA256
+          curl -sL "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/lazystatus-darwin-arm64.tar.gz" -o lazystatus.tar.gz
+          SHA256=$(shasum -a 256 lazystatus.tar.gz | awk '{print $1}')
+          
+          # Clone the homebrew tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jakeasaurus/homebrew-tap.git"
+          cd homebrew-tap
+          
+          # Update the formula
+          cat > lazystatus.rb <<EOF
+          class Lazystatus < Formula
+            desc "A TUI for monitoring status pages"
+            homepage "https://github.com/jakeasaurus/lazystatus"
+            version "${VERSION}"
+            
+            if OS.mac? && Hardware::CPU.arm?
+              url "https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-darwin-arm64.tar.gz"
+              sha256 "${SHA256}"
+            elsif OS.mac? && Hardware::CPU.intel?
+              url "https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-darwin-amd64.tar.gz"
+              sha256 "$(curl -sL https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-darwin-amd64.tar.gz | shasum -a 256 | awk '{print \$1}')"
+            elsif OS.linux? && Hardware::CPU.arm?
+              url "https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-linux-arm64.tar.gz"
+              sha256 "$(curl -sL https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-linux-arm64.tar.gz | shasum -a 256 | awk '{print \$1}')"
+            elsif OS.linux? && Hardware::CPU.intel?
+              url "https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-linux-amd64.tar.gz"
+              sha256 "$(curl -sL https://github.com/jakeasaurus/lazystatus/releases/download/v${VERSION}/lazystatus-linux-amd64.tar.gz | shasum -a 256 | awk '{print \$1}')"
+            end
+
+            def install
+              if OS.mac? && Hardware::CPU.arm?
+                bin.install "lazystatus-darwin-arm64" => "lazystatus"
+              elsif OS.mac? && Hardware::CPU.intel?
+                bin.install "lazystatus-darwin-amd64" => "lazystatus"
+              elsif OS.linux? && Hardware::CPU.arm?
+                bin.install "lazystatus-linux-arm64" => "lazystatus"
+              elsif OS.linux? && Hardware::CPU.intel?
+                bin.install "lazystatus-linux-amd64" => "lazystatus"
+              end
+            end
+
+            test do
+              system "#{bin}/lazystatus", "--version"
+            end
+          end
+          EOF
+          
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add lazystatus.rb
+          git commit -m "Update lazystatus to ${VERSION}"
+          git push

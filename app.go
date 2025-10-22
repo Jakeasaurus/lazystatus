@@ -542,7 +542,9 @@ func (m *Model) submitService() error {
 	if m.mode == ModeAdd {
 		return m.manager.Add(cfg)
 	} else if m.mode == ModeEdit {
-		return m.manager.Update(m.selected, cfg)
+		// Use actual index, not sorted index
+		actualIdx := m.sortedIndices[m.selected]
+		return m.manager.Update(actualIdx, cfg)
 	}
 
 	return nil
@@ -612,23 +614,62 @@ func (m *Model) renderServiceList(services []ServiceState) string {
 
 	// Use existing sorted indices to render in the right order
 	var lines []string
-	var addedSeparator bool
+	var addedOperationalSeparator bool
+	var addedMaintenanceSeparator bool
+	var addedDegradedSeparator bool
+	var addedCriticalSeparator bool
 	for i, origIdx := range m.sortedIndices {
 		if origIdx >= len(services) {
 			continue
 		}
 		svc := services[origIdx]
 		
+		// Add separator before first major disruption/critical service
+		if !addedCriticalSeparator && (svc.StatusLevel == StatusMajorDisruption || 
+			svc.StatusLevel == StatusConnectionError || svc.StatusLevel == StatusParseError) {
+			separator := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FF5F87")). // Red for critical
+				Render("🚨 Critical Issues " + strings.Repeat("─", listWidth-20))
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, separator)
+			addedCriticalSeparator = true
+		}
+		
+		// Add separator before first degraded service
+		if !addedDegradedSeparator && svc.StatusLevel == StatusDegraded {
+			separator := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FFAF5F")). // Orange for degraded
+				Render("⚠️  Degraded Performance " + strings.Repeat("─", listWidth-27))
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, separator)
+			addedDegradedSeparator = true
+		}
+		
+		// Add separator before first planned maintenance service
+		if !addedMaintenanceSeparator && svc.StatusLevel == StatusPlannedMaintenance {
+			separator := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#5FAFFF")). // Blue for maintenance
+				Render("🔧 Planned Maintenance " + strings.Repeat("─", listWidth-25))
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, separator)
+			addedMaintenanceSeparator = true
+		}
+		
 		// Add separator before first operational service
-		if !addedSeparator && svc.StatusLevel == StatusOperational {
+		if !addedOperationalSeparator && svc.StatusLevel == StatusOperational {
 			if i > 0 { // Only add if there are non-operational services above
 				separator := lipgloss.NewStyle().
-					Foreground(lipgloss.Color("#626262")).
+					Foreground(lipgloss.Color("#04B575")). // Green for operational
 					Render(strings.Repeat("─", listWidth-6) + " ✓ All Systems Operational")
 				lines = append(lines, "")
 				lines = append(lines, separator)
-				lines = append(lines, "")
-				addedSeparator = true
+				addedOperationalSeparator = true
 			}
 		}
 		
